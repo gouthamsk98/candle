@@ -162,7 +162,7 @@ impl Module for MLP {
     }
 }
 
-
+#[cfg(feature = "flash-attn")]
 fn flash_attn(
     q: &Tensor,
     k: &Tensor,
@@ -173,10 +173,10 @@ fn flash_attn(
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
-// #[cfg(not(feature = "flash-attn"))]
-// fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-//     unimplemented!("compile with '--features flash-attn'")
-// }
+#[cfg(not(feature = "flash-attn"))]
+fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
+}
 
 #[derive(Debug)]
 struct Attention {
