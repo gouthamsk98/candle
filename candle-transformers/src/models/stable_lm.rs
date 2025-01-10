@@ -13,9 +13,9 @@
 //! - 🤗 [Model Card](https://huggingface.co/stabilityai/stablelm-3b-4e1t)
 //!
 
-use crate::models::with_tracing::{linear, linear_no_bias, Linear};
-use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, LayerNorm, VarBuilder};
+use crate::models::with_tracing::{ linear, linear_no_bias, Linear };
+use candle::{ DType, Device, Module, Result, Tensor, D };
+use candle_nn::{ Activation, LayerNorm, VarBuilder };
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -51,7 +51,7 @@ impl Config {
             num_key_value_heads: 32,
             hidden_act: Activation::Silu,
             partial_rotary_factor: 0.25,
-            rope_theta: 10_000.,
+            rope_theta: 10_000.0,
             max_position_embeddings: 4096,
             layer_norm_eps: 1e-5,
             use_qkv_bias: false,
@@ -65,7 +65,7 @@ impl Config {
     }
 
     pub fn rotary_ndims(&self) -> usize {
-        (self.head_dim() as f64 * self.partial_rotary_factor) as usize
+        ((self.head_dim() as f64) * self.partial_rotary_factor) as usize
     }
 
     pub fn num_kv_groups(&self) -> usize {
@@ -73,7 +73,7 @@ impl Config {
     }
 
     pub fn set_use_flash_attn(&mut self, use_flash_attn: bool) {
-        self.use_flash_attn = use_flash_attn
+        self.use_flash_attn = use_flash_attn;
     }
 }
 
@@ -94,7 +94,7 @@ impl RotaryEmbedding {
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .map(|i| 1f32 / (cfg.rope_theta.powf((i as f64) / (dim as f64)) as f32))
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
@@ -113,7 +113,7 @@ impl RotaryEmbedding {
         &self,
         q: &Tensor,
         k: &Tensor,
-        seqlen_offset: usize,
+        seqlen_offset: usize
     ) -> Result<(Tensor, Tensor)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
@@ -168,7 +168,7 @@ fn flash_attn(
     k: &Tensor,
     v: &Tensor,
     softmax_scale: f32,
-    causal: bool,
+    causal: bool
 ) -> Result<Tensor> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
@@ -203,11 +203,7 @@ impl Attention {
         let head_dim = cfg.head_dim();
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let linear_layer = if cfg.use_qkv_bias {
-            linear
-        } else {
-            linear_no_bias
-        };
+        let linear_layer = if cfg.use_qkv_bias { linear } else { linear_no_bias };
 
         let q_proj = linear_layer(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj = linear_layer(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
@@ -236,7 +232,7 @@ impl Attention {
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offset: usize,
+        seqlen_offset: usize
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -260,9 +256,11 @@ impl Attention {
         let query_pass = query_states.narrow(D::Minus1, rot_ndims, pass_ndims)?;
         let key_rot = key_states.narrow(D::Minus1, 0, rot_ndims)?;
         let key_pass = key_states.narrow(D::Minus1, rot_ndims, pass_ndims)?;
-        let (query_rot, key_rot) =
-            self.rotary_emb
-                .apply_rotary_emb_qkv(&query_rot, &key_rot, seqlen_offset)?;
+        let (query_rot, key_rot) = self.rotary_emb.apply_rotary_emb_qkv(
+            &query_rot,
+            &key_rot,
+            seqlen_offset
+        )?;
         let query_states = Tensor::cat(&[query_rot, query_pass], D::Minus1)?.contiguous()?;
         let key_states = Tensor::cat(&[key_rot, key_pass], D::Minus1)?.contiguous()?;
 
@@ -279,8 +277,7 @@ impl Attention {
         }
 
         let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
-        let value_states =
-            crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
+        let value_states = crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -300,10 +297,10 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&value_states)?
         };
-        attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.hidden_size))?
-            .apply(&self.o_proj)
+        attn_output.transpose(1, 2)?.reshape((b_sz, q_len, self.hidden_size))?.apply(&self.o_proj)
+    }
+    fn reset(&mut self) {
+        self.kv_cache = None;
     }
 }
 
@@ -323,12 +320,12 @@ impl DecoderLayer {
         let input_layernorm = candle_nn::layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            vb.pp("input_layernorm"),
+            vb.pp("input_layernorm")
         )?;
         let post_attention_layernorm = candle_nn::layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            vb.pp("post_attention_layernorm"),
+            vb.pp("post_attention_layernorm")
         )?;
         Ok(Self {
             self_attn,
@@ -343,7 +340,7 @@ impl DecoderLayer {
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offset: usize,
+        seqlen_offset: usize
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let residual = xs;
@@ -353,6 +350,9 @@ impl DecoderLayer {
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
         residual + xs
+    }
+    fn reset(&mut self) {
+        self.self_attn.reset();
     }
 }
 
@@ -370,14 +370,17 @@ pub struct Model {
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let embed_tokens = candle_nn::embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            vb_m.pp("embed_tokens")
+        )?;
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
-            layers.push(layer)
+            layers.push(layer);
         }
         let norm = candle_nn::layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
@@ -396,11 +399,11 @@ impl Model {
         &self,
         b_size: usize,
         tgt_len: usize,
-        seqlen_offset: usize,
+        seqlen_offset: usize
     ) -> Result<Tensor> {
         // Sliding window mask?
         let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
+            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0.0 }))
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
@@ -409,8 +412,7 @@ impl Model {
         } else {
             mask
         };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
+        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?.to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
@@ -424,10 +426,15 @@ impl Model {
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?;
         }
         xs.narrow(1, seq_len - 1, 1)?
             .apply(&self.norm)?
             .apply(&self.lm_head)
+    }
+    pub fn reset(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.reset();
+        }
     }
 }
