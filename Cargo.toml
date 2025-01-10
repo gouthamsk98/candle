@@ -10,9 +10,9 @@ members = [
     "candle-wasm-examples/*",
     "candle-wasm-tests",
     "tensor-tools",
+    "candle-flash-attn",
 ]
 exclude = [
-   "candle-flash-attn",
    "candle-kernels",
    "candle-metal-kernels",
    "candle-onnx",
